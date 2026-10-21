@@ -1,0 +1,23 @@
+core/target/
+*.xcodeproj/xcuserdata/
+build/
+.DS_Store
+.claude/
+*.xcresult
+# personal files that sit in the project folder (diagnostics exports, screenshots, stray output)
+/*.zip
+/*.heic
+/1
+*.xcodeproj/project.xcworkspace/xcuserdata/
+core/protected/target/
+/*.mov
+
+# Generated projects and builder-specific configuration
+*.xcodeproj/
+.generated/
+project.generated.yml
+build-config.json
+**/fixtures/
+**/Fixtures/
+*.proptest-regressions
+__pycache__/
