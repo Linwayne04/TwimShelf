@@ -194,6 +194,7 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
             view.bringSubviewToFront(bottomBar)
             bottomBar.isHidden = true
             triage = vc
+            updateExitButton()
             vc.view.alpha = 0
             // the triage page is see-through (the backdrop shows): the timeline must go, or its
             // search bar, cards and tags show through underneath
@@ -203,6 +204,7 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
             }) { _ in if self.triage === vc { self.collectionView.isHidden = true; self.header.isHidden = true } }
         } else if !LibraryPrefs.triageMode, let vc = triage {
             triage = nil
+            updateExitButton()
             bottomBar.isHidden = false
             collectionView.isHidden = false
             header.isHidden = false
@@ -510,6 +512,7 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
     /// (and scroll position) while hidden; the bar stays, only the shuffle button leaves it.
     func selectTab(_ i: Int, animated: Bool = true) {
         if tabs.selectedIndex != i { tabs.select(i, animated: animated, notify: false) }
+        updateExitButton()
         let showFolders = i == 1
         if showFolders && foldersNav == nil {
             let vc = FoldersViewController()
@@ -927,14 +930,17 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
     /// what the search is.
     private func updateExitButton() {
         let words = searchField.tokens.compactMap { ($0.representedObject as? String).map(tokenTitle) } + [searchField.text ?? ""].filter { !$0.isEmpty }
-        let show = searching || !words.isEmpty
+        let inTimeline = tabs.selectedIndex == 0 && triage == nil
+        let show = inTimeline && (searching || !words.isEmpty)
         // exporting is offered while a search or a filter is in effect (not while only typing begins)
-        let showExport = !words.isEmpty || !currentFilter.isEmpty
-        downloadButton.isHidden = show || showExport
+        let showExport = inTimeline && (!words.isEmpty || !currentFilter.isEmpty)
+        downloadButton.isHidden = !inTimeline || show || showExport
+        // These buttons are siblings of the header, so hiding the header cannot hide them.
+        exitButton.isHidden = !show
+        exportButton.isHidden = !showExport
         exitButton.accessibilityValue = words.joined(separator: "、")
         guard show != exitShown || showExport != exportShown else { return }
         exitShown = show; exportShown = showExport
-        exitButton.isHidden = false; exportButton.isHidden = false
         // switch the old constraints off before the new ones on (never two required ones at odds)
         [headerTrailing, headerBesideExit, headerBesideExport, exportBesideExit, exportAtEdge].forEach { $0?.isActive = false }
         headerTrailing.isActive = !show && !showExport
