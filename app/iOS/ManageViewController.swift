@@ -140,6 +140,14 @@ final class ManageViewController: FormViewController, UIDocumentPickerDelegate {
 
     private weak var subpage: ManageSubpage?
 
+    func openDownloads() {
+        openSub("下载帖子") { [weak self] in self?.downloadSections() ?? [] }
+        // The search-bar shortcut opens this page directly; allow closing the whole sheet.
+        subpage?.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in
+            self?.navigationController?.dismiss(animated: true)
+        })
+    }
+
     private func openSub(_ title: String, _ make: @escaping () -> [Section]) {
         let vc = ManageSubpage(title: title, make: make)
         subpage = vc

@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSS
             self.feed.applyQuery(q)
             if q != TokenQuery(), self.root.content.place != .timeline { self.root.go(.timeline) }
         }
+        tokenSearch.onDownload = { [weak self] button in self?.showQuickDownload(from: button) }
         tokenSearch.onExport = { [weak self] button in self?.showSearchExport(from: button) }
         feed.onChipsChanged = { [weak self] in self?.tokenSearch.chipFilterActive = self?.feed.hasChipFilter == true }
         // a tag chosen on the tags page: its media are shown in 浏览
@@ -833,6 +834,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSS
     private var page: MacMediaGridPage? { root.content.page }
 
     // MARK: Export of a search
+
+    private var downloadPopover: NSPopover?
+
+    private func showQuickDownload(from button: NSView) {
+        downloadPopover?.close()
+        let pop = NSPopover()
+        pop.behavior = .transient
+        let host = NSHostingController(rootView: QuickDownloadView(openSettings: { [weak self, weak pop] in
+            pop?.close()
+            guard let self else { return }
+            self.main.setPanel(open: true)
+            self.main.panel.push(MacSettingsPages.download(), title: "下载帖子")
+        }, download: { [weak self, weak pop] in
+            MainActor.assumeIsolated {
+                DownloadModel.shared.download(self?.window)
+                if DownloadModel.shared.links.isEmpty { pop?.close() }
+            }
+        }))
+        host.sizingOptions = .preferredContentSize
+        pop.contentViewController = host
+        downloadPopover = pop
+        pop.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+    }
 
     private var exportPopover: NSPopover?
 

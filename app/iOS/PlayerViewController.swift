@@ -33,6 +33,7 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate,
     private let playerLayer = AVPlayerLayer()
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var playbackVisible = false
 
     private let controls = UIView()
     private let closeButton = UIButton(type: .system)
@@ -111,7 +112,11 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate,
             self?.syncProgress()
         }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in
-            self?.player.seek(to: .zero); self?.player.play()
+            guard let self else { return }
+            self.player.seek(to: .zero)
+            if self.playbackVisible || self.pip?.isPictureInPictureActive == true {
+                self.player.play()
+            }
         }
         if startAt > .zero { player.seek(to: startAt, toleranceBefore: .zero, toleranceAfter: .zero) }
         applyAudioPolicy()
@@ -171,8 +176,9 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate,
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        playbackVisible = true
         if let e = embedding {
-            player.playImmediately(atRate: 1)
+            resumePlayback()
             updatePlayButton()
             setControls(visible: true)
             e.shown()
@@ -182,6 +188,7 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate,
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        playbackVisible = false
         // turned away from in the viewer: it stops (it plays on if it comes back)
         if embedding != nil, pip?.isPictureInPictureActive != true { player.pause() }
     }
@@ -241,7 +248,7 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate,
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
-        if presentingViewController == nil { player.pause(); tearDown() }
+        if !playbackVisible { player.pause() }
         Self.inPiP = nil
     }
 
@@ -400,17 +407,25 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate,
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        // Keep playing in picture-in-picture; clean up once it ends.
+        // A pager may reuse this controller. Keep its observers until deallocation.
         if pip?.isPictureInPictureActive == true || Self.inPiP === self { return }
         player.pause()
-        tearDown()
     }
 
-    private func tearDown() {
+    deinit {
         if let t = timeObserver { player.removeTimeObserver(t); timeObserver = nil }
         if let a = audioObserver { NotificationCenter.default.removeObserver(a); audioObserver = nil }
         if let e = endObserver { NotificationCenter.default.removeObserver(e); endObserver = nil }
         volumeObservation = nil
+        hideTimer?.invalidate()
+        lockHideWork?.cancel()
+    }
+
+    private func resumePlayback() {
+        if duration > 0, player.currentTime().seconds >= duration {
+            player.seek(to: .zero)
+        }
+        player.playImmediately(atRate: 1)
     }
 
     // MARK: Controls
@@ -628,7 +643,7 @@ final class PlayerViewController: UIViewController, UIGestureRecognizerDelegate,
     @objc private func togglePlay() {
         guard !locked else { return }
         // no badge at the top: the play/pause button below shows the state and stays there
-        if player.timeControlStatus == .paused { player.playImmediately(atRate: 1) } else { player.pause() }
+        if player.timeControlStatus == .paused { resumePlayback() } else { player.pause() }
         updatePlayButton()
         setControls(visible: true)
     }

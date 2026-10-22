@@ -250,9 +250,14 @@ final class MacTokenSearch: NSView {
     /// Exports what the search found; shown while there is a search, beside the ✕.
     private let exportButton = NSButton()
     var onExport: ((NSView) -> Void)?
+    var onDownload: ((NSView) -> Void)?
+    private let downloadButton = NSButton()
     /// A filter chip of the page is on (not a capsule of this field): exporting is offered then too.
     var chipFilterActive = false { didSet { updateExportVisibility() } }
-    private func updateExportVisibility() { exportButton.isHidden = exit.isHidden && !chipFilterActive }
+    private func updateExportVisibility() {
+        exportButton.isHidden = exit.isHidden && !chipFilterActive
+        downloadButton.isHidden = !exportButton.isHidden
+    }
     var onChange: ((TokenQuery) -> Void)?
     private var tagCache: [TagCount] = []
     /// The list under the field, as on iOS: conditions, what to search for, matching tags and
@@ -283,6 +288,12 @@ final class MacTokenSearch: NSView {
         exportButton.action = #selector(exportTapped)
         exportButton.isHidden = true
         exportButton.setAccessibilityIdentifier("searchExport")
+        downloadButton.bezelStyle = .circular
+        downloadButton.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "下载帖子")
+        downloadButton.toolTip = "下载帖子"
+        downloadButton.setAccessibilityIdentifier("quickDownload")
+        downloadButton.target = self
+        downloadButton.action = #selector(downloadTapped)
         popover = makePopover()
         list.onPick = { [weak self] in self?.focusAfterPick() }
         // as on iOS, the conditions show as soon as the field is clicked, not only once typing
@@ -296,7 +307,7 @@ final class MacTokenSearch: NSView {
         host.translatesAutoresizingMaskIntoConstraints = false
         field.translatesAutoresizingMaskIntoConstraints = true
         host.addSubview(field)
-        let st = NSStackView(views: [host, exit, exportButton])
+        let st = NSStackView(views: [host, exit, exportButton, downloadButton])
         st.spacing = 6
         st.translatesAutoresizingMaskIntoConstraints = false
         addSubview(st)
@@ -333,6 +344,8 @@ final class MacTokenSearch: NSView {
         closeList()
         window?.makeFirstResponder(nil)
     }
+
+    @objc private func downloadTapped() { closeList(); onDownload?(downloadButton) }
 
     @objc private func exportTapped() { closeList(); onExport?(exportButton) }
 
@@ -434,7 +447,13 @@ final class MacTokenSearch: NSView {
         if popover.isShown, abs(popover.contentSize.height - size.height) > 1 {
             popover.close()
             popover.contentViewController?.view = NSView()     // hand the list over
-            popover = makePopover()
+            downloadButton.bezelStyle = .circular
+        downloadButton.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "下载帖子")
+        downloadButton.toolTip = "下载帖子"
+        downloadButton.setAccessibilityIdentifier("quickDownload")
+        downloadButton.target = self
+        downloadButton.action = #selector(downloadTapped)
+        popover = makePopover()
         }
         popover.contentViewController?.preferredContentSize = size
         popover.contentSize = size

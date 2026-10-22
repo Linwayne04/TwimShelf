@@ -35,6 +35,7 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
     /// The filter chips (仅 #标签, 文件夹…) float on their own under the search bar, not inside it.
     private let chipBar = UIView()
     private let searchField = UISearchTextField()
+    private let downloadButton = UIButton(type: .system)
     /// The round × beside the search bar (not inside it): ends the search.
     private let exitButton = UIButton(type: .system)
     /// Exports what the search shows; beside the ×, shown while a search or filter is in effect.
@@ -362,6 +363,13 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
         chipScroll.isHidden = true
 
         searchRow.addArrangedSubview(searchField)
+        downloadButton.setImage(UIImage(systemName: "arrow.down.circle"), for: .normal)
+        downloadButton.accessibilityLabel = "下载帖子"
+        downloadButton.accessibilityIdentifier = "quickDownload"
+        downloadButton.addAction(UIAction { [weak self] _ in self?.openDownloads() }, for: .touchUpInside)
+        downloadButton.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        downloadButton.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        searchRow.addArrangedSubview(downloadButton)
         searchRow.spacing = 6
         searchRow.alignment = .center
 
@@ -922,6 +930,7 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
         let show = searching || !words.isEmpty
         // exporting is offered while a search or a filter is in effect (not while only typing begins)
         let showExport = !words.isEmpty || !currentFilter.isEmpty
+        downloadButton.isHidden = show || showExport
         exitButton.accessibilityValue = words.joined(separator: "、")
         guard show != exitShown || showExport != exportShown else { return }
         exitShown = show; exportShown = showExport
@@ -1075,6 +1084,17 @@ final class FeedViewController: UIViewController, UICollectionViewDataSource, UI
         passes = initialPasses()
         collectionView.reloadData()
         DispatchQueue.main.async { self.updateInlinePlayback() }
+    }
+
+    private func openDownloads() {
+        searchField.resignFirstResponder()
+        let vc = ManageViewController()
+        vc.onLibraryChanged = { [weak self] in self?.reload(keepPosition: true) }
+        let nav = UINavigationController(rootViewController: vc)
+        vc.loadViewIfNeeded()
+        vc.openDownloads()
+        nav.modalPresentationStyle = .formSheet
+        present(nav, animated: true)
     }
 
     @objc private func openManage() {

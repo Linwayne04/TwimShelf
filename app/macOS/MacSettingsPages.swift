@@ -180,6 +180,7 @@ func confirmClearTriage(_ window: NSWindow?) {
 
 @MainActor
 final class DownloadModel: ObservableObject {
+    static let shared = DownloadModel()
     static let routes: [(title: String, detail: String, symbol: String, color: Color)] = [
         ("自动", "先用公开镜像 FxTwitter；拿不到时（例如锁定账号）再用 Cookie", "wand.and.stars", .blue),
         ("仅 FxTwitter", "公开镜像，不需要登录，也不会用到你的账号", "globe", .teal),
@@ -249,7 +250,7 @@ final class DownloadModel: ObservableObject {
 struct DownloadPageView: View {
     @EnvironmentObject private var env: PaneEnv
     @StateObject private var live = LiveTick()
-    @StateObject private var m = DownloadModel()
+    @StateObject private var m = DownloadModel.shared
     @State private var dropTargeted = false
 
     var body: some View {
@@ -624,4 +625,37 @@ func emptyState(symbol: String, color: Color, title: String, detail: String) -> 
     }
     .frame(maxWidth: .infinity)
     .padding(.top, 70)
+}
+
+struct QuickDownloadView: View {
+    @ObservedObject var model = DownloadModel.shared
+    var openSettings: () -> Void
+    var download: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("下载帖子").font(.headline)
+            Text("每行一个帖子链接，支持一次粘贴多条链接")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextEditor(text: $model.links)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(height: 140)
+                .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
+                .accessibilityLabel("帖子链接，每行一条")
+                .accessibilityIdentifier("quickDownloadLinks")
+            HStack {
+                Button("跳转到下载设置", action: openSettings)
+                Spacer()
+                Button("下载", action: download)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(model.links.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
 }
