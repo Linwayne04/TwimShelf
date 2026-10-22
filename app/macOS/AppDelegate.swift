@@ -22,6 +22,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, NSS
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !Core.open() { AppLog.error("lifecycle", "无法打开资料库"); macAlert(nil, "无法打开资料库", Core.libraryDirectory.path) }
         #if DEBUG
+        if let out = ProcessInfo.processInfo.environment["TL_MEMORY_AUDIT"],
+           let models = ProcessInfo.processInfo.environment["TL_MEMORY_AUDIT_MODELS"],
+           ProcessInfo.processInfo.environment["TL_LIBRARY_DIR"] != nil {
+            Core.setModelsDirectory(URL(fileURLWithPath: models, isDirectory: true))
+            Task {
+                await AIEngine.shared.auditIdleMemory(to: URL(fileURLWithPath: out))
+                NSApp.terminate(nil)
+            }
+            return
+        }
         if let out = ProcessInfo.processInfo.environment["TL_SETTINGS_LAYOUT_TEST"],
            ProcessInfo.processInfo.environment["TL_LIBRARY_DIR"] != nil {
             runSettingsLayoutAudit(out)

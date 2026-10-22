@@ -55,6 +55,7 @@ actor AIEngine {
 
     private var tagger: (repo: String, container: ModelContainer)?
     private var embedder: (repo: String, container: EmbedderModelContainer)?
+    private var idleUnload: Task<Void, Never>?
 
     // MARK: One GPU job at a time
     //
@@ -65,11 +66,37 @@ actor AIEngine {
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private func acquire() async {
+        idleUnload?.cancel()
+        idleUnload = nil
         if !busy { busy = true; return }
         await withCheckedContinuation { waiters.append($0) }
     }
     private func release() {
-        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+        if waiters.isEmpty {
+            busy = false
+            guard tagger != nil || embedder != nil else { return }
+            // Keep weights between images in a batch, but not for the rest of the app's life.
+            idleUnload = Task { [weak self] in
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) }
+                catch { return }
+                await self?.unloadIfIdle()
+            }
+        } else { waiters.removeFirst().resume() }
+    }
+
+    private func unloadIfIdle() {
+        guard !Task.isCancelled, !busy, waiters.isEmpty else { return }
+        idleUnload = nil
+        releaseModels()
+    }
+
+    private func releaseModels() {
+        let before = MLX.Memory.snapshot()
+        tagger = nil
+        embedder = nil
+        MLX.GPU.clearCache()
+        let after = MLX.Memory.snapshot()
+        AppLog.info("memory", "AI unloaded: active \(before.activeMemory) -> \(after.activeMemory), cache \(before.cacheMemory) -> \(after.cacheMemory) bytes")
     }
     private func exclusive<T>(_ body: () async throws -> T) async rethrows -> T {
         await acquire()
@@ -80,13 +107,41 @@ actor AIEngine {
     /// Releases the models (after the running inference, never during it).
     func unloadAll() async {
         await exclusive {
-            tagger = nil
-            embedder = nil
-            MLX.GPU.clearCache()
+            releaseModels()
         }
     }
 
     // MARK: Tagging
+
+    #if DEBUG
+    /// Isolated diagnostic: synthetic input, no tags or media are written to the library.
+    func auditIdleMemory(to output: URL) async {
+        var lines: [String] = []
+        func record(_ label: String) {
+            let s = MLX.Memory.snapshot()
+            lines.append("\(label): active=\(s.activeMemory) cache=\(s.cacheMemory) tagger=\(tagger != nil) embedder=\(embedder != nil)")
+            try? lines.joined(separator: "\n").write(to: output, atomically: true, encoding: .utf8)
+        }
+        record("baseline")
+        do {
+            guard let model = Core.installedModels().first(where: { $0.vision }) else {
+                record("SKIP: no vision model installed"); return
+            }
+            for round in 1...2 {
+                let image = CIImage(color: CIColor(red: 0.2, green: 0.4, blue: 0.8)).cropped(to: CGRect(x: 0, y: 0, width: 448, height: 448))
+                _ = try await tags(for: image, repo: model.id)
+                record("round \(round) after inference")
+                try await Task.sleep(nanoseconds: 35_000_000_000)
+                record("round \(round) after idle")
+                guard tagger == nil, embedder == nil else { record("FAIL: idle models retained"); return }
+            }
+            record("PASS")
+        } catch {
+            lines.append("ERROR: \(error.localizedDescription)")
+            try? lines.joined(separator: "\n").write(to: output, atomically: true, encoding: .utf8)
+        }
+    }
+    #endif
 
     /// The tagging prompt is an in-app setting (Settings → AI 模型 → 提示词). The bundled
     /// AIPrompt.txt only supplies the defaults.
@@ -240,6 +295,9 @@ actor AIEngine {
     private func loadEmbedder(_ repo: String) async throws -> EmbedderModelContainer {
         if let e = embedder, e.repo == repo { return e.container }
         guard Self.isSupported else { throw EngineError.simulator }
+        embedder = nil
+        MLX.GPU.clearCache()
+        MLX.GPU.set(cacheLimit: 128 * 1024 * 1024)
         guard let dir = Core.installedModels().first(where: { $0.id == repo })?.url, FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
             throw EngineError.notInstalled(repo)
         }
