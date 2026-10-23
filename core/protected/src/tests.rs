@@ -419,16 +419,17 @@ fn falls_back_to_tweet_result_by_rest_id() {
 #[test]
 #[ignore = "requires private response fixtures; see BUILDING.md"]
 fn check_credentials_returns_the_account() {
-    let transport = MockTransport::with_body(
-        200,
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/verify_credentials.json")).expect("supply your own fixture"),
-    );
-    let account = check_credentials_with(&cookies(), &transport, deadline()).unwrap();
+    let transport = MockTransport::new(vec![
+        reply(404, ""),
+        reply(404, ""),
+        reply(200, std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/verify_credentials.json")).expect("supply your own fixture")),
+    ]);
+    let account = check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline()).unwrap();
     assert_eq!(account.screen_name, "test_user");
     assert_eq!(account.name.as_deref(), Some("Test User"));
     let requests = transport.requests();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0]
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2]
         .url
         .starts_with("https://api.x.com/1.1/account/verify_credentials.json"));
 }
@@ -439,7 +440,7 @@ fn check_credentials_maps_a_bad_session() {
         401,
         r#"{"errors":[{"code":32,"message":"Could not authenticate you."}]}"#,
     );
-    let error = check_credentials_with(&cookies(), &transport, deadline()).unwrap_err();
+    let error = check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline()).unwrap_err();
     assert!(
         matches!(error, ProtectedError::Unauthorized(_)),
         "{error:?}"
@@ -451,18 +452,20 @@ fn check_credentials_maps_a_bad_session() {
 #[ignore = "requires private response fixtures; see BUILDING.md"]
 fn check_credentials_falls_back_to_settings() {
     let transport = MockTransport::new(vec![
+        reply(404, ""),
+        reply(404, ""),
         reply(
             403,
             r#"{"errors":[{"code":32,"message":"Could not authenticate you."}]}"#,
         ),
         reply(200, std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/settings.json")).expect("supply your own fixture")),
     ]);
-    let account = check_credentials_with(&cookies(), &transport, deadline()).unwrap();
+    let account = check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline()).unwrap();
     assert_eq!(account.screen_name, "test_user");
     assert_eq!(account.name, None);
     let requests = transport.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[1].url.contains("account/settings.json"));
+    assert_eq!(requests.len(), 4);
+    assert!(requests[3].url.contains("account/settings.json"));
 }
 
 #[test]
@@ -470,13 +473,87 @@ fn check_credentials_treats_a_login_page_as_unauthorized() {
     let transport = MockTransport::new(vec![
         reply(200, "<html>login</html>"),
         reply(200, "<html>login</html>"),
+        reply(200, "<html>login</html>"),
+        reply(200, "<html>login</html>"),
     ]);
-    let error = check_credentials_with(&cookies(), &transport, deadline()).unwrap_err();
+    let error = check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline()).unwrap_err();
     assert!(
         matches!(error, ProtectedError::Unauthorized(_)),
         "{error:?}"
     );
     assert!(error.to_string().contains("Cookie"));
+}
+
+#[test]
+fn check_credentials_uses_the_viewer_query() {
+    let transport = MockTransport::with_body(
+        200,
+        r#"{"data":{"viewer":{"user_results":{"result":{"core":{"screen_name":"someone","name":"Some One"}}}}}}"#,
+    );
+    let account =
+        check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline()).unwrap();
+    assert_eq!(account.screen_name, "someone");
+    assert_eq!(account.name.as_deref(), Some("Some One"));
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, Method::Get);
+    assert!(requests[0].url.starts_with("https://x.com/i/api/graphql/"));
+    assert!(requests[0].url.contains("/Viewer?"));
+}
+
+#[test]
+fn check_credentials_maps_a_viewer_auth_error() {
+    let transport = MockTransport::with_body(
+        200,
+        r#"{"errors":[{"code":32,"message":"Could not authenticate you."}]}"#,
+    );
+    let error = check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline())
+        .unwrap_err();
+    assert!(
+        matches!(error, ProtectedError::Unauthorized(_)),
+        "{error:?}"
+    );
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[test]
+fn check_credentials_falls_through_a_404_to_multi_list() {
+    let transport = MockTransport::new(vec![
+        reply(404, ""),
+        reply(
+            200,
+            r#"{"users":[{"user_id":"1","name":"Some One","screen_name":"someone"}]}"#,
+        ),
+    ]);
+    let account =
+        check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline()).unwrap();
+    assert_eq!(account.screen_name, "someone");
+    assert_eq!(account.name.as_deref(), Some("Some One"));
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].url,
+        "https://x.com/i/api/1.1/account/multi/list.json"
+    );
+}
+
+#[test]
+fn check_credentials_reports_404_only_when_every_endpoint_fails() {
+    let transport = MockTransport::new(vec![
+        reply(404, ""),
+        reply(404, ""),
+        reply(404, ""),
+        reply(404, ""),
+    ]);
+    let error = check_credentials_with(&cookies(), &transport, &OpsTable::builtin(), deadline())
+        .unwrap_err();
+    assert!(error.to_string().contains("HTTP 404"), "{error:?}");
+    let urls: Vec<String> = transport.requests().into_iter().map(|r| r.url).collect();
+    assert_eq!(urls.len(), 4);
+    assert!(urls[0].contains("/Viewer?"));
+    assert!(urls[1].contains("account/multi/list.json"));
+    assert!(urls[2].contains("account/verify_credentials.json"));
+    assert!(urls[3].contains("account/settings.json"));
 }
 
 #[test]

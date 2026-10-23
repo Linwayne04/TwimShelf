@@ -1,8 +1,8 @@
 //! Protected-post module for TwimShelf.
 //!
 //! Fetches a post with the user's X session (`auth_token` + `ct0`) through the same GraphQL
-//! `TweetDetail` operation the web client uses, and checks the session with the v1.1
-//! `account/verify_credentials` endpoint. The core calls these functions directly on blocking
+//! `TweetDetail` operation the web client uses, and checks the session with the GraphQL `Viewer`
+//! operation, falling back to the v1.1 account endpoints. The core calls these functions directly on blocking
 //! worker threads; there is no subprocess, no Tokio runtime on the calling thread, and no file
 //! access.
 //!
@@ -35,6 +35,8 @@ const MIN_REQUEST_TIME: Duration = Duration::from_millis(500);
 const VERIFY_URL: &str =
     "https://api.x.com/1.1/account/verify_credentials.json?skip_status=true&include_entities=false";
 const SETTINGS_URL: &str = "https://x.com/i/api/1.1/account/settings.json";
+/// Still answers web sessions that send no `x-client-transaction-id`, unlike the two above.
+const MULTI_LIST_URL: &str = "https://x.com/i/api/1.1/account/multi/list.json";
 
 /// Fetches one post (a status link, e.g. `https://x.com/someone/status/1700000000000000001`).
 ///
@@ -58,14 +60,14 @@ pub fn fetch_post(
 
 /// Checks the cookies (Settings → 检查 Cookie) and returns the signed-in account.
 ///
-/// Blocking. Uses `account/verify_credentials`, with `account/settings` as a fallback for older
-/// or partially available endpoints.
+/// Blocking. Uses the web client's GraphQL `Viewer` query, then `account/multi/list`,
+/// `account/verify_credentials` and `account/settings`; a 404 from one falls through to the next.
 pub fn check_credentials(credentials: &Credentials) -> Result<Account, ProtectedError> {
     let cookies = Cookies::new(credentials)?;
     let client = http::client()?;
     let transport = ReqwestTransport::new(client);
     let deadline = Instant::now() + TOTAL_BUDGET;
-    check_credentials_with(&cookies, &transport, deadline)
+    check_credentials_with(&cookies, &transport, ops::global(), deadline)
 }
 
 pub(crate) fn fetch_post_with(
@@ -271,10 +273,15 @@ fn build_graphql_request(
 pub(crate) fn check_credentials_with(
     cookies: &Cookies,
     transport: &dyn Transport,
+    table: &OpsTable,
     deadline: Instant,
 ) -> Result<Account, ProtectedError> {
     let mut last_error: Option<ProtectedError> = None;
-    for (index, url) in [VERIFY_URL, SETTINGS_URL].iter().enumerate() {
+    // Index 0 is the GraphQL `Viewer` query; the rest are plain v1.1 GETs.
+    for (index, url) in ["", MULTI_LIST_URL, VERIFY_URL, SETTINGS_URL]
+        .iter()
+        .enumerate()
+    {
         let cap = if index == 0 {
             API_TIMEOUT
         } else {
@@ -284,12 +291,26 @@ pub(crate) fn check_credentials_with(
             Ok(timeout) => timeout,
             Err(error) => return Err(last_error.unwrap_or(error)),
         };
-        let request = HttpRequest {
-            method: Method::Get,
-            url: (*url).to_string(),
-            headers: http::api_headers(cookies),
-            body: None,
-            timeout,
+        let request = if index == 0 {
+            let Some(meta) = table.get(ops::VIEWER) else {
+                continue;
+            };
+            let variables = ops::viewer_variables();
+            match build_graphql_request(&meta, ops::VIEWER, &variables, false, cookies, deadline) {
+                Ok(request) => HttpRequest { timeout, ..request },
+                Err(error) => {
+                    remember_error(&mut last_error, error);
+                    continue;
+                }
+            }
+        } else {
+            HttpRequest {
+                method: Method::Get,
+                url: (*url).to_string(),
+                headers: http::api_headers(cookies),
+                body: None,
+                timeout,
+            }
         };
         let response = match transport.send(&request) {
             Ok(response) => response,
@@ -357,7 +378,7 @@ pub(crate) fn check_credentials_with(
         .unwrap_or_else(|| ProtectedError::Other("无法检查 Cookie，X 接口可能已变化".into())))
 }
 
-/// Keeps the most informative error while trying the two account endpoints. A fallback endpoint
+/// Keeps the most informative error while trying the account endpoints. A fallback endpoint
 /// failing with 404/500 must not hide the first endpoint's "Cookie rejected".
 fn remember_error(slot: &mut Option<ProtectedError>, candidate: ProtectedError) {
     fn rank(error: &ProtectedError) -> u8 {
