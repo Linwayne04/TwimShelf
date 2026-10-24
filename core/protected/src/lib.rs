@@ -184,8 +184,9 @@ fn graphql(
                     "X 返回的数据为空（接口格式可能已变化）".into(),
                 ));
             }
-            414 | 400 if !use_post => {
-                // Long GET URLs and some parameter changes are accepted only as POST.
+            414 | 400 | 422 if !use_post => {
+                // Long GET URLs and some parameter changes are accepted only as POST; a 422
+                // "must be defined" also gets one POST retry with the full JSON body.
                 use_post = true;
             }
             404 => {
@@ -252,11 +253,14 @@ fn build_graphql_request(
             .map_err(|_| ProtectedError::Other("无法构造 X 请求地址".into()))?;
         {
             let mut query = url.query_pairs_mut();
-            query.append_pair("variables", &compact(variables));
-            query.append_pair("features", &compact(&meta.features));
+            // Everything goes out verbatim, `false` entries included: since October 2026 X
+            // rejects a request whose `false` variables (e.g. `includePromotedContent`) are
+            // missing with HTTP 422 "must be defined", and the web client sends all flags.
+            query.append_pair("variables", &verbatim(variables));
+            query.append_pair("features", &verbatim(&meta.features));
             if let Some(toggles) = &meta.field_toggles {
                 if toggles.as_object().is_some_and(|map| !map.is_empty()) {
-                    query.append_pair("fieldToggles", &compact(toggles));
+                    query.append_pair("fieldToggles", &verbatim(toggles));
                 }
             }
         }
@@ -413,19 +417,9 @@ fn request_timeout(deadline: Instant, cap: Duration) -> Result<Duration, Protect
     Ok(remaining.min(cap).max(MIN_REQUEST_TIME))
 }
 
-/// Drops `false` feature flags: X treats a missing flag as false and this keeps GET URLs short.
-fn compact(value: &Value) -> String {
-    match value {
-        Value::Object(map) => {
-            let filtered: serde_json::Map<String, Value> = map
-                .iter()
-                .filter(|(_, value)| !matches!(value, Value::Bool(false)))
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect();
-            serde_json::to_string(&Value::Object(filtered)).unwrap_or_else(|_| "{}".into())
-        }
-        other => serde_json::to_string(other).unwrap_or_else(|_| "{}".into()),
-    }
+/// Serialises a value as-is, keeping `false` entries (X now requires them to be present).
+fn verbatim(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "{}".into())
 }
 
 #[cfg(test)]

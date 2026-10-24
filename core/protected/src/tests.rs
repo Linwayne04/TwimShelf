@@ -202,6 +202,47 @@ fn tombstone_is_not_found() {
 }
 
 #[test]
+fn sends_false_variables_instead_of_dropping_them() {
+    // X answers HTTP 422 "must be defined" when a `false` variable is left out.
+    let transport = MockTransport::with_body(
+        401,
+        r#"{"errors":[{"code":32,"message":"Could not authenticate you."}]}"#,
+    );
+    let _ = fetch_with(ID, &transport, &OpsTable::builtin());
+    let requests = transport.requests();
+    let query: std::collections::HashMap<String, String> = url::Url::parse(&requests[0].url)
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect();
+    let variables: serde_json::Value = serde_json::from_str(&query["variables"]).unwrap();
+    assert_eq!(variables["focalTweetId"], serde_json::json!(ID));
+    assert_eq!(variables["includePromotedContent"], serde_json::json!(false));
+    assert_eq!(variables["with_rux_injections"], serde_json::json!(false));
+    // The same goes for feature flags: every builtin flag, `false` ones included, is sent.
+    let features: serde_json::Value = serde_json::from_str(&query["features"]).unwrap();
+    let builtin = OpsTable::builtin();
+    let meta = builtin.get(crate::ops::TWEET_DETAIL).unwrap();
+    assert_eq!(features, meta.features);
+    // Field toggles keep their `false` entries too, exactly like the web client sends them.
+    let toggles: serde_json::Value = serde_json::from_str(&query["fieldToggles"]).unwrap();
+    assert_eq!(Some(&toggles), meta.field_toggles.as_ref());
+    assert_eq!(toggles["withPayments"], serde_json::json!(false));
+}
+
+#[test]
+fn retries_a_422_as_post_with_the_full_body() {
+    let transport = MockTransport::with_body(422, r#"{"errors":[{"message":"must be defined"}]}"#);
+    let _ = fetch_with(ID, &transport, &OpsTable::builtin());
+    let requests = transport.requests();
+    assert!(requests.len() >= 2, "{requests:?}");
+    assert!(matches!(requests[1].method, Method::Post));
+    let body: serde_json::Value =
+        serde_json::from_str(requests[1].body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["variables"]["includePromotedContent"], serde_json::json!(false));
+}
+
+#[test]
 fn maps_http_failures_to_the_right_error() {
     let unauthorized = fetch_with(
         ID,
